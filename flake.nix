@@ -205,10 +205,54 @@
           fi
           touch $out
         '';
+        aeneas-static =
+          let
+            pkgsStatic = pkgs.pkgsStatic;
+            ocamlPackagesStatic = pkgsStatic.ocaml-ng.ocamlPackages_5_2;
+            charon-ml-static = charon.packages.${system}.charon-ml.override {
+              ocamlPackages = ocamlPackagesStatic;
+            };
+            easy_logging-static = ocamlPackagesStatic.buildDunePackage rec {
+              pname = "easy_logging";
+              version = "0.8.2";
+              src = pkgs.fetchFromGitHub {
+                owner = "sapristi";
+                repo = "easy_logging";
+                rev = "v${version}";
+                sha256 = "sha256-Xy6Rfef7r2K8DTok7AYa/9m3ZEV07LlUeMQSRayLBco=";
+              };
+              buildInputs = [ ocamlPackagesStatic.calendar ];
+            };
+          in
+          ocamlPackagesStatic.buildDunePackage {
+            pname = "aeneas";
+            version = "0.1.0";
+            duneVersion = "3";
+            src = ./src;
+            OCAMLPARAM = "_,warn-error=+A"; # Turn all warnings into errors.
+            propagatedBuildInputs = [
+              easy_logging-static
+              charon-ml-static
+            ] ++ (with ocamlPackagesStatic; [
+              calendar
+              core_unix
+              ppx_deriving
+              visitors
+              yojson
+              zarith
+              ocamlgraph
+              progress
+              domainslib
+            ]);
+            postInstall = ''
+              ln -s ${charon.packages.${system}.charon}/bin/charon $out/bin
+            '';
+          };
       in
       {
         packages = {
           inherit aeneas;
+          inherit aeneas-static;
           inherit (charon.packages.${system}) charon;
           inherit charon-ml;
           default = aeneas;

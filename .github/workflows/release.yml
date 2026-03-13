@@ -44,14 +44,15 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_name: aeneas-linux-x86_64
-            # We use the static variant to produce a portable, statically-linked musl binary.
-            ocaml_compiler: ocaml-variants.5.2.0+options,ocaml-option-static
+            use_nix: true
           - os: macos-15-intel
             artifact_name: aeneas-macos-x86_64
             ocaml_compiler: 5.2.0
+            use_nix: false
           - os: macos-latest
             artifact_name: aeneas-macos-aarch64
             ocaml_compiler: 5.2.0
+            use_nix: false
 
     steps:
       - uses: actions/checkout@v4
@@ -59,14 +60,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install musl-tools (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        # We need libgmp-dev and libffi-dev for certain OCaml packages (like
-        # zarith and core_unix) to build correctly, especially for static
-        # linking.
-        run: sudo apt-get update && sudo apt-get install -y musl-tools libgmp-dev libffi-dev
+      - name: Install Nix
+        if: matrix.use_nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build Aeneas (Nix)
+        if: matrix.use_nix
+        run: nix build .#aeneas-static --extra-experimental-features "nix-command flakes" -L
 
       - uses: ocaml/setup-ocaml@v3
+        if: "!matrix.use_nix"
         with:
           ocaml-compiler: ${{ matrix.ocaml_compiler }}
           # Disabling sandboxing is often necessary on GHA runners to avoid
@@ -74,11 +79,7 @@ jobs:
           opam-disable-sandboxing: true
 
       - name: Install dependencies
-        env:
-          # On some Linux runners (especially for static builds), we need to
-          # explicitly point to the multiarch include/lib paths for gmp and ffi.
-          CPATH: /usr/include/x86_64-linux-gnu
-          LIBRARY_PATH: /usr/lib/x86_64-linux-gnu
+        if: "!matrix.use_nix"
         run: |
           set -eo pipefail
 
@@ -89,10 +90,12 @@ jobs:
             ocamlgraph menhir ocamlformat.0.27.0 unionFind zarith progress domainslib -y
 
       - name: Setup Charon
+        if: "!matrix.use_nix"
         # 1. Make sure we've fetched the right Charon commit.
         run: make setup-charon
 
       - name: Build Aeneas
+        if: "!matrix.use_nix"
         run: make
 
       - name: Package
@@ -100,7 +103,8 @@ jobs:
           set -eo pipefail
 
           mkdir -p staging
-          cp bin/aeneas staging/
+          BINARY_PATH="${{ matrix.use_nix && 'result/bin/aeneas' || 'bin/aeneas' }}"
+          cp "$BINARY_PATH" staging/aeneas
           cp -r backends staging/
           cd staging
           tar -czvf ../${{ matrix.artifact_name }}.tar.gz *
@@ -109,6 +113,7 @@ jobs:
       - name: Smoke Test
         run: |
           set -eo pipefail
+
           ./staging/aeneas --help > /dev/null
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             # Verify the binary is indeed statically linked (not a dynamic executable).
